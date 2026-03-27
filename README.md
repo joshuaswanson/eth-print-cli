@@ -11,15 +11,10 @@ CLI tool for [ETH Zurich's webprint service](https://webprint.ethz.ch). Upload a
 ## Installation
 
 ```bash
-pip install eth-print-cli
-```
-
-Or install from source:
-
-```bash
 git clone https://github.com/joshuaswanson/eth-print-cli.git
 cd eth-print-cli
 pip install .
+playwright install chromium
 ```
 
 ## Usage
