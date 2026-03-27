@@ -68,9 +68,13 @@ ethprint logout          # end session
 
 PDF, HTML, TXT, PS, BMP, GIF, JPEG, PNG, SVG, TIFF
 
-## How it works
+## Why this exists
 
-ETH's webprint runs [SavaPage](https://www.savapage.org/). This tool talks to the same internal API that the web interface uses. Files are uploaded to your webprint inbox and print jobs are submitted to the CARD-STUD printer queue, which you can release at any student printer on campus.
+ETH's webprint runs [SavaPage](https://www.savapage.org/), which has a REST API and IPP support for exactly this kind of thing. But ETH has disabled both for student accounts. The Internet Printer settings page just says "No URL available" and the REST API returns 401 regardless of credentials.
+
+So this tool does it the hard way: it uses a headless browser to log in (because SavaPage needs a Wicket-initialized server session that can't be created with plain HTTP requests), then talks to the same internal API endpoints that the web UI uses.
+
+PDFs are also automatically resized to match your target paper size before uploading. If you try to print an A3 PDF on A4, it gets scaled down transparently instead of printing on the wrong paper size or getting cropped.
 
 ## Support
 
