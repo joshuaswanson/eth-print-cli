@@ -1,6 +1,7 @@
 """SavaPage webprint API client for ETH Zurich."""
 
 import json
+import mimetypes
 from pathlib import Path
 
 import requests
@@ -21,6 +22,65 @@ class WebPrintError(Exception):
 
 class AuthError(WebPrintError):
     pass
+
+
+def _browser_login(username, password):
+    """Use playwright to log in via the real web UI and extract session cookies.
+
+    SavaPage requires a Wicket-initialized server session that can only be
+    created by rendering the page with JavaScript. A plain requests POST to
+    /api will fail with 'no user info' without this step.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise AuthError(
+            "playwright is required for login. "
+            "Install it with: pip install playwright && playwright install chromium"
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(ignore_https_errors=True)
+        page = context.new_page()
+
+        page.goto(f"{BASE_URL}/user", wait_until="networkidle")
+
+        # Fill in the login form
+        page.fill("#sp-login-user-name", username)
+        page.fill("#sp-login-user-password", password)
+        page.click("#sp-btn-login-name")
+
+        # Wait for navigation to the main page (successful login)
+        try:
+            page.wait_for_function(
+                """() => {
+                    const el = document.querySelector('#page-main');
+                    return el && el.classList.contains('ui-page-active');
+                }""",
+                timeout=10000,
+            )
+        except Exception:
+            # Check for error message
+            error_text = page.text_content("body")
+            browser.close()
+            if "invalid" in error_text.lower() or "denied" in error_text.lower():
+                raise AuthError("Invalid username or password")
+            raise AuthError("Login failed (timeout waiting for main page)")
+
+        # Extract cookies
+        cookies = context.cookies()
+        browser.close()
+
+    cookie_dict = {}
+    for c in cookies:
+        if "ethz.ch" in c["domain"]:
+            cookie_dict[c["name"]] = c["value"]
+
+    if not cookie_dict:
+        raise AuthError("No session cookies received after login")
+
+    return cookie_dict
 
 
 class Client:
@@ -72,36 +132,12 @@ class Client:
         return self._user
 
     def login(self, username, password):
-        """Authenticate with ETH credentials."""
-        resp = self.session.post(
-            f"{BASE_URL}/api",
-            data={
-                "request": "login",
-                "webAppType": "USER",
-                "dto": json.dumps({
-                    "authMode": "NAME",
-                    "authId": username,
-                    "authPw": password,
-                }),
-            },
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        code = result.get("result", {}).get("code")
-
-        if code == "0":
-            self._user = username
-            self._save_session()
-            return True
-
-        # code 99 = another session active, still counts as success
-        if code == "99":
-            self._user = username
-            self._save_session()
-            return True
-
-        msg = result.get("result", {}).get("txt", "Login failed")
-        raise AuthError(msg)
+        """Authenticate with ETH credentials via headless browser."""
+        cookies = _browser_login(username, password)
+        self.session.cookies.update(cookies)
+        self._user = username
+        self._save_session()
+        return True
 
     def logout(self):
         """End the current session."""
@@ -127,10 +163,11 @@ class Client:
                 f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
             )
 
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         with open(path, "rb") as f:
             resp = self.session.post(
                 f"{BASE_URL}/upload/webprint",
-                files={"file": (path.name, f)},
+                files={"file": (path.name, f, content_type)},
             )
 
         resp.raise_for_status()
@@ -210,7 +247,6 @@ class Client:
         code = result.get("result", {}).get("code")
         if code != "0":
             raise WebPrintError("Failed to get stats")
-        # Balance is in the dto
         dto = result.get("dto")
         if isinstance(dto, str):
             dto = json.loads(dto)
