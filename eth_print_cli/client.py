@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+import tempfile
 from pathlib import Path
 
 import requests
@@ -14,6 +15,85 @@ SUPPORTED_EXTENSIONS = {
     ".pdf", ".html", ".txt", ".ps",
     ".bmp", ".gif", ".jpg", ".jpeg", ".png", ".svg", ".tiff",
 }
+
+
+# Target media sizes in points (1 point = 1/72 inch)
+MEDIA_DIMENSIONS = {
+    "iso_a4_210x297mm": (595.28, 841.89),
+    "iso_a3_297x420mm": (841.89, 1190.55),
+    "na_letter_8.5x11in": (612.0, 792.0),
+}
+
+# How far off (in points) a PDF page can be before we consider it mismatched
+_SIZE_TOLERANCE = 5.0
+
+
+def resize_pdf(input_path, target_media):
+    """Resize a PDF to match the target media size if needed.
+
+    Returns the path to use for upload (original if no resize needed,
+    or a temp file if resized). Caller should not delete the temp file
+    until upload is complete.
+    """
+    target_dims = MEDIA_DIMENSIONS.get(target_media)
+    if target_dims is None:
+        return input_path, None
+
+    try:
+        import fitz
+    except ImportError:
+        return input_path, None
+
+    doc = fitz.open(str(input_path))
+    target_w, target_h = target_dims
+    needs_resize = False
+
+    for page in doc:
+        pw, ph = page.rect.width, page.rect.height
+        # Check both orientations (portrait and landscape)
+        portrait_match = (
+            abs(pw - target_w) < _SIZE_TOLERANCE
+            and abs(ph - target_h) < _SIZE_TOLERANCE
+        )
+        landscape_match = (
+            abs(pw - target_h) < _SIZE_TOLERANCE
+            and abs(ph - target_w) < _SIZE_TOLERANCE
+        )
+        if not portrait_match and not landscape_match:
+            needs_resize = True
+            break
+
+    if not needs_resize:
+        doc.close()
+        return input_path, None
+
+    # Build a new PDF with pages scaled to the target size
+    new_doc = fitz.open()
+    for page in doc:
+        pw, ph = page.rect.width, page.rect.height
+
+        # Preserve orientation: if source is landscape, make target landscape too
+        if pw > ph:
+            page_w, page_h = max(target_w, target_h), min(target_w, target_h)
+        else:
+            page_w, page_h = min(target_w, target_h), max(target_w, target_h)
+
+        new_page = new_doc.new_page(width=page_w, height=page_h)
+        scale = min(page_w / pw, page_h / ph)
+        x_off = (page_w - pw * scale) / 2
+        y_off = (page_h - ph * scale) / 2
+        dest = fitz.Rect(x_off, y_off, x_off + pw * scale, y_off + ph * scale)
+        new_page.show_pdf_page(dest, doc, page.number)
+
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".pdf", prefix="ethprint_", delete=False
+    )
+    new_doc.save(tmp.name)
+    new_doc.close()
+    doc.close()
+    tmp.close()
+
+    return Path(tmp.name), tmp.name
 
 
 class WebPrintError(Exception):

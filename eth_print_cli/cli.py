@@ -1,11 +1,13 @@
 """CLI interface for ETH webprint."""
 
 import getpass
+import os
 import sys
+from pathlib import Path
 
 import click
 
-from .client import AuthError, Client, WebPrintError
+from .client import AuthError, Client, WebPrintError, resize_pdf
 
 MEDIA_SIZES = {
     "a4": "iso_a4_210x297mm",
@@ -16,6 +18,14 @@ MEDIA_SIZES = {
 
 def get_client():
     return Client()
+
+
+def _cleanup(temp_files):
+    for f in temp_files:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
 
 
 def handle_auth(client):
@@ -122,15 +132,25 @@ def print_cmd(files, copies, color, simplex, media, pages, printer):
     client = get_client()
     handle_auth(client)
 
+    media_value = MEDIA_SIZES[media.lower()]
+    temp_files = []
+
     for path in files:
         try:
-            client.upload(path)
-            click.echo(f"Uploaded: {path}")
+            upload_path = path
+            if path.lower().endswith(".pdf"):
+                resized, tmp = resize_pdf(path, media_value)
+                if tmp:
+                    temp_files.append(tmp)
+                    src_name = Path(path).name
+                    click.echo(f"Resized {src_name} to {media.upper()}")
+                    upload_path = resized
+            client.upload(upload_path)
+            click.echo(f"Uploaded: {Path(path).name}")
         except WebPrintError as e:
             click.echo(f"Failed to upload {path}: {e}", err=True)
+            _cleanup(temp_files)
             sys.exit(1)
-
-    media_value = MEDIA_SIZES[media.lower()]
     try:
         msg = client.print_job(
             printer=printer,
@@ -143,7 +163,10 @@ def print_cmd(files, copies, color, simplex, media, pages, printer):
         click.echo(f"Print job submitted: {msg}")
     except WebPrintError as e:
         click.echo(f"Print failed: {e}", err=True)
+        _cleanup(temp_files)
         sys.exit(1)
+
+    _cleanup(temp_files)
 
 
 @main.command()
