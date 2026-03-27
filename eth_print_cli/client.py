@@ -28,25 +28,40 @@ MEDIA_DIMENSIONS = {
 _SIZE_TOLERANCE = 5.0
 
 
+def _points_to_size_name(w, h):
+    """Try to match point dimensions to a known paper size name."""
+    for name, (tw, th) in MEDIA_DIMENSIONS.items():
+        if (abs(w - tw) < _SIZE_TOLERANCE and abs(h - th) < _SIZE_TOLERANCE) or \
+           (abs(w - th) < _SIZE_TOLERANCE and abs(h - tw) < _SIZE_TOLERANCE):
+            # Extract friendly name like "A4" from "iso_a4_210x297mm"
+            parts = name.split("_")
+            return parts[1].upper() if len(parts) > 1 else name
+    # Fall back to mm dimensions
+    w_mm = w * 25.4 / 72
+    h_mm = h * 25.4 / 72
+    return f"{w_mm:.0f}x{h_mm:.0f}mm"
+
+
 def resize_pdf(input_path, target_media):
     """Resize a PDF to match the target media size if needed.
 
-    Returns the path to use for upload (original if no resize needed,
-    or a temp file if resized). Caller should not delete the temp file
-    until upload is complete.
+    Returns (path_to_upload, temp_file_to_cleanup, source_size_name).
+    temp_file_to_cleanup is None if no resize was needed.
+    source_size_name is None if no resize was needed.
     """
     target_dims = MEDIA_DIMENSIONS.get(target_media)
     if target_dims is None:
-        return input_path, None
+        return input_path, None, None
 
     try:
         import fitz
     except ImportError:
-        return input_path, None
+        return input_path, None, None
 
     doc = fitz.open(str(input_path))
     target_w, target_h = target_dims
     needs_resize = False
+    source_size = None
 
     for page in doc:
         pw, ph = page.rect.width, page.rect.height
@@ -61,11 +76,12 @@ def resize_pdf(input_path, target_media):
         )
         if not portrait_match and not landscape_match:
             needs_resize = True
+            source_size = _points_to_size_name(pw, ph)
             break
 
     if not needs_resize:
         doc.close()
-        return input_path, None
+        return input_path, None, None
 
     # Build a new PDF with pages scaled to the target size
     new_doc = fitz.open()
@@ -93,7 +109,7 @@ def resize_pdf(input_path, target_media):
     doc.close()
     tmp.close()
 
-    return Path(tmp.name), tmp.name
+    return Path(tmp.name), tmp.name, source_size
 
 
 class WebPrintError(Exception):

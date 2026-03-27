@@ -139,11 +139,14 @@ def print_cmd(files, copies, color, simplex, media, pages, printer):
         try:
             upload_path = path
             if path.lower().endswith(".pdf"):
-                resized, tmp = resize_pdf(path, media_value)
+                resized, tmp, source_size = resize_pdf(path, media_value)
                 if tmp:
                     temp_files.append(tmp)
                     src_name = Path(path).name
-                    click.echo(f"Resized {src_name} to {media.upper()}")
+                    click.echo(
+                        f"Warning: {src_name} is {source_size}, "
+                        f"resizing to {media.upper()}"
+                    )
                     upload_path = resized
             client.upload(upload_path)
             click.echo(f"Uploaded: {Path(path).name}")
